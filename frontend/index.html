@@ -1,0 +1,1157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OSI Layer Visualizer</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <style>
+    :root {
+      --bg: #070b14;
+      --surface: #0d1117;
+      --surface2: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #7d8590;
+      --success: #22c55e;
+      --danger: #f43f5e;
+      --warning: #f59e0b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 88px; }
+
+    /* ── Header ── */
+    .topbar {
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 14px 24px; display: flex; align-items: center; justify-content: space-between;
+      position: sticky; top: 0; z-index: 100;
+    }
+    .topbar h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.3px; }
+    .topbar p  { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .conn-badge {
+      display: inline-flex; align-items: center; gap: 7px; font-size: 12px;
+      padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border);
+      background: var(--surface2); color: var(--muted); transition: all .3s;
+    }
+    .conn-badge.live { color: #bbf7d0; border-color: rgba(34,197,94,.4); }
+    .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; flex-shrink: 0; }
+    .conn-badge.live .conn-dot {
+      background: var(--success);
+      box-shadow: 0 0 8px rgba(34,197,94,.8);
+      animation: dotpulse 1.5s infinite;
+    }
+    @keyframes dotpulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.35)} }
+
+    /* ── Layout ── */
+    .wrapper {
+      display: grid; grid-template-columns: 360px 1fr; gap: 20px;
+      padding: 20px; align-items: start;
+    }
+    @media(max-width:900px) { .wrapper { grid-template-columns: 1fr; } }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 18px;
+    }
+    .card + .card { margin-top: 16px; }
+    .card-title {
+      font-size: 11px; font-weight: 600; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 14px;
+    }
+
+    /* ── Form elements ── */
+    .field { margin-bottom: 12px; }
+    .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+    .field input[type="text"], .field select {
+      width: 100%; background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 6px; padding: 9px 11px; color: var(--text);
+      font-family: 'JetBrains Mono', monospace; font-size: 12px; outline: none;
+      transition: border-color .2s;
+    }
+    .field input[type="text"]:focus, .field select:focus { border-color: #6366f1; }
+    .field select option { background: var(--surface2); }
+    .row { display: flex; gap: 10px; }
+    .row .field { flex: 1; }
+    .speed-wrap { display: flex; align-items: center; gap: 10px; }
+    #speedVal { font-family: 'JetBrains Mono'; font-size: 12px; min-width: 36px; color: var(--text); }
+    input[type="range"] {
+      flex: 1; -webkit-appearance: none; height: 5px; border-radius: 999px; outline: none;
+      background: linear-gradient(90deg,#6366f1,#10b981,#f97316,#f43f5e,#a8a29e);
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 15px; height: 15px; border-radius: 50%;
+      background: var(--text); border: 2px solid var(--surface2); cursor: pointer;
+    }
+    input[type="range"]::-moz-range-thumb {
+      width: 15px; height: 15px; border-radius: 50%;
+      background: var(--text); border: 2px solid var(--surface2); cursor: pointer; border: none;
+    }
+    .corrupt-wrap { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; color: #f43f5e; }
+    .corrupt-wrap input { accent-color: #f43f5e; cursor: pointer; width:14px; height:14px; }
+    .btns { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+    button {
+      height: 38px; border-radius: 6px; border: 1px solid transparent; font-size: 13px;
+      font-weight: 600; cursor: pointer; transition: opacity .2s, transform .1s;
+      font-family: 'Inter', sans-serif;
+    }
+    button:active:not(:disabled) { transform: scale(.98); }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-primary { background: #6366f1; color: #fff; box-shadow: 0 0 18px rgba(99,102,241,.35); }
+    .btn-primary:not(:disabled):hover { background: #4f52d9; }
+    .btn-decap { background: #10b981; color: #06130f; box-shadow: 0 0 18px rgba(16,185,129,.28); }
+    .btn-decap:not(:disabled):hover { background: #0ea371; }
+    .btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
+    .btn-ghost:not(:disabled):hover { background: var(--surface2); }
+    .playback-row {
+      display: flex; align-items: center; gap: 10px; padding: 9px 10px;
+      border: 1px solid var(--border); border-radius: 6px; background: rgba(22,27,34,.55);
+    }
+    .btn-play {
+      width: 42px; height: 38px; display: inline-flex; align-items: center; justify-content: center;
+      flex-shrink: 0; border-radius: 8px; border-color: var(--border);
+      background: var(--text); color: #0a0a0f;
+    }
+    .btn-play:not(:disabled):hover { background: #fff; }
+    .play-symbol { display: block; width: 0; height: 0; margin-left: 3px; border-top: 8px solid transparent; border-bottom: 8px solid transparent; border-left: 13px solid #0a0a0f; }
+    .btn-play.is-playing .play-symbol {
+      width: 15px; height: 16px; margin-left: 0; border-top: 0; border-bottom: 0;
+      border-left: 5px solid #0a0a0f; border-right: 5px solid #0a0a0f;
+    }
+    .playback-copy { min-width: 0; line-height: 1.3; }
+    .playback-copy span { display: block; color: var(--text); font-size: 12px; font-weight: 600; }
+    .playback-copy small { display: block; color: var(--muted); font-size: 11px; }
+
+    /* ── Info panel ── */
+    .info-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
+    .info-name { font-size: 17px; font-weight: 600; }
+    .proto-badge {
+      font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+      border: 1px solid; text-transform: uppercase; letter-spacing: .05em; display: none;
+    }
+    .info-desc { font-size: 12px; color: var(--muted); margin-bottom: 12px; line-height: 1.55; }
+    .fields-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 6px; }
+    .fields-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 12px; }
+    .fields-table td { padding: 3px 0; vertical-align: top; }
+    .fields-table td:first-child { color: var(--muted); width: 44%; }
+    .fields-table td:last-child { font-family: 'JetBrains Mono', monospace; color: var(--text); word-break: break-all; }
+    .progress-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
+    .pdots { display: flex; gap: 5px; }
+    .pdot { width: 7px; height: 7px; border-radius: 50%; background: var(--surface2); border: 1px solid var(--border); transition: background .3s; }
+
+    /* ── OSI Stack ── */
+    .stack-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
+    .stack-head .card-title { margin: 0; }
+    @media(max-width:700px) {
+      .stack-head { align-items: flex-start; flex-direction: column; }
+    }
+    .stack-subtitle { font-size: 11px; color: var(--muted); margin-bottom: 14px; line-height: 1.5; }
+    .stack-row {
+      display: flex; align-items: center; gap: 10px; padding: 7px 0;
+      border-bottom: 1px solid rgba(48,54,61,.4); opacity: .35;
+      transition: opacity .4s, box-shadow .3s;
+    }
+    .stack-row:last-child { border-bottom: none; }
+    .stack-row.active { opacity: 1; }
+    .stack-row.glow { border-radius: 7px; }
+    .stack-row.is-corrupt { box-shadow: 0 0 0 2px #f43f5e; border-radius: 7px; }
+    .stack-row.placeholder { height: 26px; font-style: italic; font-size: 11px; opacity: .28; }
+    .stack-row.placeholder .lbadge,
+    .stack-row.placeholder .ebar,
+    .stack-row.placeholder .bcnt { display: none; }
+    .stack-row.placeholder .ph-text { display: block; flex: 1; }
+    .stack-row.decapped { opacity: .22; }
+    .stack-row.decapped .bcnt { color: var(--muted); }
+    .ph-text { display: none; }
+
+    .lbadge {
+      width: 34px; height: 34px; border-radius: 7px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 600; font-family: 'JetBrains Mono', monospace; font-size: 11px;
+      border: 1px solid; transition: border-color .3s, color .3s, background .3s;
+    }
+    .ebar { flex: 1; display: flex; align-items: center; gap: 5px; min-height: 34px; flex-wrap: wrap; }
+    .hdr-block {
+      padding: 5px 9px; border-radius: 5px; font-size: 11px; font-weight: 600;
+      white-space: nowrap; color: #0a0a0f;
+    }
+    .hdr-block.new { animation: slideIn .3s ease; }
+    .hdr-block.strip { outline: 2px solid rgba(230,237,243,.6); animation: stripPulse .7s ease infinite alternate; }
+    @keyframes slideIn { from{opacity:0;transform:translateX(-24px)} to{opacity:1;transform:translateX(0)} }
+    @keyframes stripPulse { from{filter:brightness(1)} to{filter:brightness(1.35)} }
+    .payload-block {
+      padding: 5px 9px; border-radius: 5px; font-size: 11px;
+      background: rgba(255,255,255,.07); color: var(--text);
+      border: 1px dashed var(--border); max-width: 140px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .bcnt { font-family: 'JetBrains Mono'; font-size: 11px; color: var(--muted); min-width: 72px; text-align: right; flex-shrink: 0; }
+
+    /* â”€â”€ Beginner narration â”€â”€ */
+    .explain-card { margin-top: 16px; }
+    .explain-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    .explain-head .card-title { margin: 0; }
+    .explain-mode {
+      font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--muted);
+      border: 1px solid var(--border); border-radius: 999px; padding: 4px 9px; white-space: nowrap;
+    }
+    .explain-list {
+      list-style: none; display: flex; flex-direction: column; gap: 8px;
+      max-height: 190px; overflow-y: auto; padding-right: 4px;
+    }
+    .explain-list li {
+      font-size: 12px; line-height: 1.55; color: var(--muted);
+      padding: 9px 11px; border: 1px solid rgba(48,54,61,.55);
+      border-radius: 6px; background: rgba(7,11,20,.55);
+    }
+    .explain-list li.current {
+      color: var(--text); border-color: rgba(99,102,241,.55);
+      background: rgba(99,102,241,.1);
+    }
+
+    /* ── Hex dump ── */
+    .hex-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .hex-count { font-size: 11px; font-family: 'JetBrains Mono'; color: var(--muted); }
+    .hex-guide {
+      margin-bottom: 10px; padding: 10px 12px; border-left: 3px solid #6366f1;
+      background: rgba(99,102,241,.08); border-radius: 6px;
+    }
+    .hex-guide-title { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 5px; }
+    .hex-guide-text { font-size: 12px; line-height: 1.55; color: var(--muted); }
+    .hex-guide-legend { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    .hex-pill {
+      display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
+      color: var(--muted); font-family: 'JetBrains Mono', monospace;
+    }
+    .hex-swatch { width: 18px; height: 12px; border-radius: 3px; background: rgba(99,102,241,.25); }
+    .hex-swatch.red { background: rgba(244,63,94,.3); }
+    .hex-swatch.text { background: rgba(230,237,243,.14); border: 1px dashed var(--border); }
+    .corrupt-banner {
+      display: none; margin-bottom: 10px; padding: 10px 14px; border-radius: 6px;
+      background: rgba(244,63,94,.1); border: 1px solid rgba(244,63,94,.35);
+      color: #f43f5e; font-size: 12px; line-height: 1.5;
+    }
+    .corrupt-banner.show { display: block; }
+    .hex-pre {
+      display: none; background: var(--bg); padding: 14px; border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace; font-size: 11.5px; line-height: 1.85;
+      overflow-x: auto; white-space: pre; color: var(--muted);
+      border: 1px solid rgba(48,54,61,.5);
+    }
+    .hex-pre.show { display: block; }
+    .byt { display: inline-block; width: 19px; text-align: center; }
+    .byt.hl { border-radius: 3px; }
+    .byt.bad { background: rgba(244,63,94,.25); color: #f43f5e; border-radius: 3px; }
+    .asc-p { color: var(--text); }
+    .asc-d { color: var(--border); }
+
+    .floating-player {
+      position: fixed; right: 18px; bottom: 18px; z-index: 9998;
+      width: min(280px, calc(100vw - 36px));
+    }
+    .floating-player .playback-row {
+      background: rgba(22,27,34,.96); box-shadow: 0 14px 36px rgba(0,0,0,.42);
+      backdrop-filter: blur(10px);
+    }
+    .floating-player .btn-play { width: 46px; height: 42px; }
+    @media(max-width:700px) {
+      .floating-player { left: 14px; right: 14px; bottom: 14px; width: auto; }
+    }
+
+    /* ── Toasts ── */
+    .toast-wrap { position: fixed; right: 18px; bottom: 92px; display: flex; flex-direction: column; gap: 8px; z-index: 9999; }
+    .toast {
+      min-width: 210px; max-width: 320px; padding: 9px 13px; border-radius: 7px;
+      background: var(--surface2); border: 1px solid var(--border);
+      font-size: 12px; color: var(--text); opacity: 1; transform: translateY(0);
+      transition: opacity .35s, transform .35s;
+    }
+    .toast.success { border-color: rgba(34,197,94,.55); }
+    .toast.error   { border-color: rgba(244,63,94,.55); color: #fecdd3; }
+    .toast.warning { border-color: rgba(245,158,11,.55); color: #fde68a; }
+    .toast.out     { opacity: 0; transform: translateY(5px); }
+  </style>
+</head>
+<body>
+
+<header class="topbar">
+  <div>
+    <h1>OSI Layer Visualizer</h1>
+    <p>Real-time packet encapsulation — Layers 1–7</p>
+  </div>
+  <div id="connBadge" class="conn-badge">
+    <span class="conn-dot"></span>
+    <span id="connLabel">Disconnected</span>
+  </div>
+</header>
+
+<main class="wrapper">
+
+  <!-- LEFT COLUMN -->
+  <section>
+    <div class="card">
+      <div class="card-title">Configuration</div>
+
+      <div class="field">
+        <label for="message">Message</label>
+        <input id="message" type="text" value="Hello, World!" placeholder="Your payload here">
+      </div>
+      <div class="field">
+        <label for="protocol">Protocol</label>
+        <select id="protocol">
+          <option value="tcp">TCP / IP</option>
+          <option value="udp">UDP / IP</option>
+          <option value="http">HTTP over TCP</option>
+          <option value="osi">OSI Full Model (L5 + L6)</option>
+        </select>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="src_ip">Source IP</label>
+          <input id="src_ip" type="text" value="192.168.0.1">
+        </div>
+        <div class="field">
+          <label for="dst_ip">Destination IP</label>
+          <input id="dst_ip" type="text" value="192.168.0.2">
+        </div>
+      </div>
+      <div class="field">
+        <label>Animation speed — <span id="speedVal">0.9 s</span></label>
+        <div class="speed-wrap">
+          <input id="speed" type="range" min="0.3" max="2.0" step="0.1" value="0.9">
+        </div>
+      </div>
+      <div class="field">
+        <label class="corrupt-wrap">
+          <input id="corrupt" type="checkbox">
+          Simulate IP checksum corruption
+        </label>
+      </div>
+      <div class="btns">
+        <button id="btnEnc" class="btn-primary">Encapsulate Packet</button>
+        <button id="btnDec" class="btn-decap" disabled>Decapsulate Packet</button>
+        <button id="btnReset" class="btn-ghost">Reset</button>
+        <button id="btnPcap" class="btn-ghost" disabled>Export PCAP ⬇</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Layer Insight</div>
+      <div class="info-header">
+        <div class="info-name" id="infoName">Click Encapsulate to begin</div>
+        <div class="proto-badge" id="infoBadge"></div>
+      </div>
+      <div class="info-desc" id="infoDesc">Packet details and header fields will appear here as each layer is built.</div>
+      <div class="fields-label">Header Fields</div>
+      <table class="fields-table"><tbody id="fieldsTbl"></tbody></table>
+      <div class="progress-row">
+        <span id="progText">Layer 0 of 5</span>
+        <div id="progDots" class="pdots"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- RIGHT COLUMN -->
+  <section>
+    <div class="card">
+      <div class="stack-head">
+        <div class="card-title">Packet Encapsulation / Decapsulation Stack</div>
+      </div>
+      <div class="stack-subtitle">
+        Sending wraps headers around the payload from L7 to L1. Receiving reverses the path from L1 to L7,
+        stripping one header at a time until the original data is revealed.
+      </div>
+
+      <div class="stack-row" data-layer="7" data-color="#6366f1">
+        <div class="lbadge" style="color:#6366f1;border-color:rgba(99,102,241,.35);background:rgba(99,102,241,.1)">L7</div>
+        <div class="ebar"></div>
+        <div class="bcnt">-- B</div>
+      </div>
+      <div class="stack-row placeholder" data-layer="6" data-color="#38bdf8">
+        <div class="lbadge" style="color:#38bdf8;border-color:rgba(56,189,248,.35);background:rgba(56,189,248,.1)">L6</div>
+        <div class="ebar"></div>
+        <div class="bcnt">-- B</div>
+        <div class="ph-text">Presentation — not used in TCP/IP model</div>
+      </div>
+      <div class="stack-row placeholder" data-layer="5" data-color="#facc15">
+        <div class="lbadge" style="color:#facc15;border-color:rgba(250,204,21,.35);background:rgba(250,204,21,.1)">L5</div>
+        <div class="ebar"></div>
+        <div class="bcnt">-- B</div>
+        <div class="ph-text">Session — not used in TCP/IP model</div>
+      </div>
+      <div class="stack-row" data-layer="4" data-color="#10b981">
+        <div class="lbadge" style="color:#10b981;border-color:rgba(16,185,129,.35);background:rgba(16,185,129,.1)">L4</div>
+        <div class="ebar"></div>
+        <div class="bcnt">-- B</div>
+      </div>
+      <div class="stack-row" data-layer="3" data-color="#f97316">
+        <div class="lbadge" style="color:#f97316;border-color:rgba(249,115,22,.35);background:rgba(249,115,22,.1)">L3</div>
+        <div class="ebar"></div>
+        <div class="bcnt">-- B</div>
+      </div>
+      <div class="stack-row" data-layer="2" data-color="#f43f5e">
+        <div class="lbadge" style="color:#f43f5e;border-color:rgba(244,63,94,.35);background:rgba(244,63,94,.1)">L2</div>
+        <div class="ebar"></div>
+        <div class="bcnt">-- B</div>
+      </div>
+      <div class="stack-row" data-layer="1" data-color="#a8a29e">
+        <div class="lbadge" style="color:#a8a29e;border-color:rgba(168,162,158,.35);background:rgba(168,162,158,.1)">L1</div>
+        <div class="ebar"></div>
+        <div class="bcnt">-- B</div>
+      </div>
+    </div>
+
+    <div class="card explain-card">
+      <div class="explain-head">
+        <div class="card-title">What's Really Happening</div>
+        <div id="whatMode" class="explain-mode">Ready</div>
+      </div>
+      <ol id="whatList" class="explain-list"></ol>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="hex-header">
+        <div class="card-title" style="margin:0">Hex Dump</div>
+        <div class="hex-count" id="hexCount">0 bytes</div>
+      </div>
+      <div class="hex-guide">
+        <div class="hex-guide-title" id="hexGuideTitle">Real Packet Bytes</div>
+        <div class="hex-guide-text" id="hexGuideText">
+          This area shows the packet in raw computer form. Each pair like 48 or ff is one byte.
+        </div>
+        <div class="hex-guide-legend">
+          <span class="hex-pill"><span class="hex-swatch"></span>current layer bytes</span>
+          <span class="hex-pill"><span class="hex-swatch red"></span>bad checksum</span>
+          <span class="hex-pill"><span class="hex-swatch text"></span>readable text on the right</span>
+        </div>
+      </div>
+      <div class="corrupt-banner" id="corruptBanner">
+        ⚠&nbsp; IP Checksum Corrupted — Routers would silently drop this packet.
+        Bytes 10–11 of the IP header (highlighted in red) hold an intentionally invalid checksum.
+      </div>
+      <pre class="hex-pre" id="hexPre"></pre>
+    </div>
+  </section>
+</main>
+
+<div class="floating-player" aria-live="polite">
+  <div class="playback-row">
+    <button id="btnPause" class="btn-play" disabled aria-label="Play simulation" title="Play simulation">
+      <span class="play-symbol" aria-hidden="true"></span>
+    </button>
+    <div class="playback-copy">
+      <span id="playbackStatus">Ready</span>
+      <small>Pause to read each step</small>
+    </div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toasts"></div>
+
+<script>
+// ── State ───────────────────────────────────────────────────────────────
+let isBuilding   = false;
+let isPaused     = false;
+let buildDone    = false;
+let canDecapsulate = false;
+let layerCount   = 0;
+let corruptOn    = false;
+let activeBuildId = null;
+let activeMode   = 'encap';
+let activeDecapLayer = null;
+const layerMap   = {};   // layerNumber → event data
+const strippedLayers = new Set();
+let layerOrder   = [7,4,3,2,1];
+
+// ── DOM refs ─────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const connBadge   = $('connBadge');
+const connLabel   = $('connLabel');
+const btnEnc      = $('btnEnc');
+const btnPause    = $('btnPause');
+const btnDec      = $('btnDec');
+const btnReset    = $('btnReset');
+const btnPcap     = $('btnPcap');
+const playbackStatus = $('playbackStatus');
+const msgInput    = $('message');
+const protoSel    = $('protocol');
+const srcInput    = $('src_ip');
+const dstInput    = $('dst_ip');
+const speedIn     = $('speed');
+const speedVal    = $('speedVal');
+const corruptChk  = $('corrupt');
+const infoName    = $('infoName');
+const infoBadge   = $('infoBadge');
+const infoDesc    = $('infoDesc');
+const fieldsTbl   = $('fieldsTbl');
+const progText    = $('progText');
+const progDots    = $('progDots');
+const hexPre      = $('hexPre');
+const hexCount    = $('hexCount');
+const hexGuideTitle = $('hexGuideTitle');
+const hexGuideText  = $('hexGuideText');
+const corruptBnr  = $('corruptBanner');
+const whatMode    = $('whatMode');
+const whatList    = $('whatList');
+const toasts      = $('toasts');
+
+const allRows = Array.from(document.querySelectorAll('.stack-row[data-layer]'));
+const storyKeys = new Set();
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function hexToRgba(hex, a) {
+  const c = hex.replace('#','');
+  const r = parseInt(c.slice(0,2),16), g = parseInt(c.slice(2,4),16), b = parseInt(c.slice(4,6),16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+function toast(msg, type='success') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  toasts.appendChild(el);
+  setTimeout(() => el.classList.add('out'), 3500);
+  setTimeout(() => el.remove(), 4000);
+}
+
+function setLayerOrder() {
+  const isOsi = protoSel.value === 'osi';
+  layerOrder = isOsi ? [7,6,5,4,3,2,1] : [7,4,3,2,1];
+  const placeholders = getLayerPlaceholders(protoSel.value);
+  allRows.forEach(row => {
+    const n = +row.dataset.layer;
+    if (n === 5 || n === 6) {
+      row.classList.toggle('placeholder', !isOsi);
+      row.querySelector('.ph-text').textContent = placeholders[n];
+    }
+  });
+}
+
+function getLayerPlaceholders(protocol) {
+  const text = {
+    tcp: {
+      6: 'Presentation - no separate L6 header in TCP/IP',
+      5: 'Session - no separate L5 header in TCP/IP',
+    },
+    udp: {
+      6: 'Presentation - no separate L6 header in UDP/IP',
+      5: 'Session - no separate L5 header in UDP/IP',
+    },
+    http: {
+      6: 'Presentation - HTTP carries formatted app data over TCP',
+      5: 'Session - HTTP over TCP does not add a separate L5 header',
+    },
+  };
+  return text[protocol] || {
+    6: 'Presentation - explicit L6 header in OSI full mode',
+    5: 'Session - explicit L5 header in OSI full mode',
+  };
+}
+
+function syncButtons() {
+  btnEnc.disabled = isBuilding;
+  btnEnc.textContent = isBuilding && activeMode === 'encap' ? 'Building…' : 'Encapsulate Packet';
+  btnPause.disabled = !isBuilding;
+  btnPause.classList.toggle('is-playing', isBuilding && !isPaused);
+  const pauseLabel = !isBuilding ? 'Play simulation' : (isPaused ? 'Resume simulation' : 'Pause simulation');
+  btnPause.setAttribute('aria-label', pauseLabel);
+  btnPause.title = pauseLabel;
+  playbackStatus.textContent = !isBuilding ? 'Ready' : (isPaused ? 'Paused' : 'Playing');
+  btnDec.disabled = isBuilding || !canDecapsulate;
+  btnDec.textContent = isBuilding && activeMode === 'decap' ? 'Decapsulating…' : 'Decapsulate Packet';
+  btnPcap.disabled = !buildDone || isBuilding;
+}
+
+function updateConn(live) {
+  connBadge.classList.toggle('live', live);
+  connLabel.textContent = live ? 'Live' : 'Disconnected';
+  if (!live) toast('Socket disconnected — attempting reconnect…', 'warning');
+}
+
+function makeBuildId() {
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function isActiveEvent(data) {
+  return data && data.build_id === activeBuildId;
+}
+
+async function controlBuild(action) {
+  const res = await fetch('/api/control', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({action, build_id: activeBuildId}),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+function getProgressOrder() {
+  return activeMode === 'decap' ? [...layerOrder].reverse() : layerOrder;
+}
+
+function resetStory() {
+  storyKeys.clear();
+  whatMode.textContent = 'Ready';
+  whatList.innerHTML = '';
+  addStoryItem('Click Encapsulate Packet to watch your message become a real network packet.', 'ready');
+}
+
+function startStory(mode) {
+  storyKeys.clear();
+  whatMode.textContent = mode === 'decap' ? 'Receiving' : 'Sending';
+  whatList.innerHTML = '';
+  addStoryItem(
+    mode === 'decap'
+      ? 'The receiver starts with the finished packet and removes headers one layer at a time.'
+      : 'Your message starts as plain data. Each layer will add the information it needs for delivery.',
+    `${mode}-start`
+  );
+}
+
+function addStoryItem(text, key) {
+  if (key && storyKeys.has(key)) return;
+  if (key) storyKeys.add(key);
+  Array.from(whatList.children).forEach(item => item.classList.remove('current'));
+  const item = document.createElement('li');
+  item.className = 'current';
+  item.textContent = text;
+  whatList.appendChild(item);
+  whatList.scrollTop = whatList.scrollHeight;
+}
+
+function getProtocolName() {
+  const selected = protoSel.options[protoSel.selectedIndex];
+  return selected ? selected.textContent : protoSel.value.toUpperCase();
+}
+
+function addSkipStory(direction) {
+  if (protoSel.value === 'osi') return;
+  const key = `${direction}-skip-l6-l5-${protoSel.value}`;
+  const protoName = getProtocolName();
+  const text = direction === 'decap'
+    ? `${protoName} has no separate Layer 6 or Layer 5 headers to remove, so the receiver goes from Transport straight back to Application.`
+    : `${protoName} skips Layer 6 and Layer 5 because this protocol stack does not create separate Presentation or Session headers; that work is handled inside the app or transport protocols.`;
+  addStoryItem(text, key);
+}
+
+function storyForLayer(data) {
+  const layer = data.layer_number;
+  const isDecap = data.direction === 'decap';
+  const proto = protoSel.value;
+  const protocol = data.protocol;
+  const payload = msgInput.value || 'Hello, World!';
+
+  if (!isDecap) {
+    if (layer === 7 && proto === 'http') return 'Layer 7 turns your message into an HTTP request, like a browser asking a server for a page.';
+    if (layer === 7) return `Layer 7 holds your actual message: "${payload}". This is the data the user cares about.`;
+    if (layer === 6) return 'Layer 6 decides how the data should look to both computers, such as text encoding, compression, or encryption settings.';
+    if (layer === 5) return 'Layer 5 adds conversation control so both sides can keep the same communication session organized.';
+    if (layer === 4 && protocol === 'TCP') return 'Layer 4 adds a TCP header with ports, sequence details, and reliability information so the message can arrive in order.';
+    if (layer === 4) return 'Layer 4 adds a UDP header with ports. UDP is smaller and faster, but it does not promise delivery or retransmit lost data.';
+    if (layer === 3) return 'Layer 3 adds IP addresses, which tell routers where the packet is coming from and where it should go.';
+    if (layer === 2) return 'Layer 2 adds Ethernet MAC addresses so the packet can move across the local network link.';
+    if (layer === 1) return 'Layer 1 turns the frame into bits and timing signals that can travel through the cable, fiber, or wireless medium.';
+  }
+
+  if (layer === 1) return 'The receiver first reads the raw bits from the network medium and removes the physical-layer preamble.';
+  if (layer === 2) return 'Layer 2 checks the Ethernet frame, reads the MAC addresses, then removes the Ethernet header.';
+  if (layer === 3) {
+    return data.corrupt
+      ? 'Layer 3 reads the IP header and finds a bad checksum. In a real network, this packet would be dropped here.'
+      : 'Layer 3 reads the IP addresses, confirms the IP header, then removes it and passes the payload upward.';
+  }
+  if (layer === 4 && protocol === 'TCP') return 'Layer 4 uses the TCP ports and sequence information, then removes the TCP header so the application data can continue upward.';
+  if (layer === 4) return 'Layer 4 uses the UDP ports to find the right app, then removes the small UDP header.';
+  if (layer === 5) return 'Layer 5 removes the session information because the receiver has matched this data to the right conversation.';
+  if (layer === 6) return 'Layer 6 removes presentation details, leaving the data in the format the application expects.';
+  if (layer === 7 && proto === 'http') return 'Layer 7 receives the HTTP request. The network headers are gone, so the app can read the request normally.';
+  if (layer === 7) return `Layer 7 receives the original message again: "${payload}". Decapsulation is complete.`;
+
+  return data.description;
+}
+
+function updateStory(data) {
+  const direction = data.direction === 'decap' ? 'decap' : 'encap';
+  if (direction === 'encap') {
+    addStoryItem(storyForLayer(data), `${direction}-layer-${data.layer_number}`);
+    if (data.layer_number === 7) addSkipStory(direction);
+    return;
+  }
+  if (data.layer_number === 7) addSkipStory(direction);
+  addStoryItem(storyForLayer(data), `${direction}-layer-${data.layer_number}`);
+}
+
+// ── Info panel ────────────────────────────────────────────────────────────
+function renderInfo(data) {
+  const isDecap = data.direction === 'decap';
+  infoName.textContent = `${isDecap ? 'Receiving ' : ''}${data.layer_name} (Layer ${data.layer_number})`;
+  infoName.style.color = data.color;
+
+  infoBadge.style.display = 'inline-block';
+  infoBadge.textContent = data.protocol;
+  infoBadge.style.color = data.color;
+  infoBadge.style.borderColor = hexToRgba(data.color, .3);
+  infoBadge.style.background  = hexToRgba(data.color, .12);
+
+  infoDesc.textContent = data.description;
+
+  fieldsTbl.innerHTML = '';
+  Object.entries(data.fields).forEach(([k,v]) => {
+    const tr = document.createElement('tr');
+    const tdK = document.createElement('td'); tdK.textContent = k;
+    const tdV = document.createElement('td'); tdV.textContent = String(v);
+    if (String(v).startsWith('0x') || String(v).startsWith('0X'))
+      tdV.style.color = data.color;
+    tr.append(tdK, tdV);
+    fieldsTbl.appendChild(tr);
+  });
+
+  const progressOrder = getProgressOrder();
+  progText.textContent = `${isDecap ? 'Decapsulation' : 'Encapsulation'} ${layerCount} of ${progressOrder.length}`;
+  progDots.innerHTML = '';
+  progressOrder.forEach((n, i) => {
+    const d = document.createElement('div');
+    d.className = 'pdot';
+    if (i < layerCount) {
+      const ld = layerMap[n];
+      if (ld) d.style.background = ld.color;
+    }
+    progDots.appendChild(d);
+  });
+}
+
+// ── Stack rows ────────────────────────────────────────────────────────────
+function renderStack(incoming) {
+  // For each row that has data, rebuild its encapsulation bar fully
+  allRows.forEach(row => {
+    const n   = +row.dataset.layer;
+    const ld  = layerMap[n];
+    const bar = row.querySelector('.ebar');
+    const bcnt = row.querySelector('.bcnt');
+
+    if (!ld) return; // not yet received
+
+    row.classList.add('active');
+    row.classList.remove('decapped');
+    row.classList.toggle('is-corrupt', corruptOn && n === 3);
+    bar.innerHTML = '';
+
+    // Build blocks from outermost header down to this layer's header,
+    // then the payload. The visual order is: [outermost … innermost | payload]
+    // layerOrder goes from L7 (inner) to L1 (outer), so we collect all
+    // received layers up to and including this row's layer, then reverse.
+    const receivedInOrder = layerOrder.filter(ln => layerMap[ln] && ln >= n);
+    // receivedInOrder is sorted inner→outer; reverse for outer→inner display
+    receivedInOrder.reverse().forEach(ln => {
+      const block = document.createElement('div');
+      block.className = 'hdr-block' + (ln === incoming.layer_number ? ' new' : '');
+      block.style.background = layerMap[ln].color;
+      block.textContent = `${layerMap[ln].protocol} ${layerMap[ln].header_size}B`;
+      bar.appendChild(block);
+    });
+
+    // Payload chip
+    const p = document.createElement('div');
+    p.className = 'payload-block';
+    p.title = msgInput.value || 'Hello, World!';
+    p.textContent = msgInput.value || 'Hello, World!';
+    bar.appendChild(p);
+
+    // Byte count from cumulative_hex
+    const byteCount = ld.cumulative_hex.trim()
+      ? ld.cumulative_hex.trim().split(/\s+/).length : 0;
+    bcnt.textContent = `${byteCount} B`;
+
+    // Glow effect on the row that just arrived
+    if (n === incoming.layer_number) {
+      row.classList.add('glow');
+      row.style.boxShadow = `0 0 0 2px ${incoming.color}`;
+      setTimeout(() => {
+        row.classList.remove('glow');
+        if (!corruptOn || n !== 3) row.style.boxShadow = '';
+      }, 1600);
+    }
+  });
+}
+
+// ── Hex dump ──────────────────────────────────────────────────────────────
+function renderDecapStack(incoming) {
+  allRows.forEach(row => {
+    const n = +row.dataset.layer;
+    const ld = layerMap[n];
+    const bar = row.querySelector('.ebar');
+    const bcnt = row.querySelector('.bcnt');
+
+    if (!ld) return;
+
+    if (strippedLayers.has(n)) {
+      row.classList.remove('active','glow','is-corrupt');
+      row.classList.add('decapped');
+      row.style.boxShadow = '';
+      bar.innerHTML = '';
+      bcnt.textContent = 'stripped';
+      return;
+    }
+
+    row.classList.add('active');
+    row.classList.remove('decapped');
+    row.classList.toggle('is-corrupt', corruptOn && n === 3);
+    bar.innerHTML = '';
+
+    const remainingInOrder = layerOrder.filter(ln =>
+      layerMap[ln] && ln >= n && !strippedLayers.has(ln)
+    );
+    remainingInOrder.reverse().forEach(ln => {
+      const block = document.createElement('div');
+      block.className = 'hdr-block' + (ln === incoming.layer_number ? ' strip' : '');
+      block.style.background = layerMap[ln].color;
+      block.textContent = `${layerMap[ln].protocol} ${layerMap[ln].header_size}B`;
+      bar.appendChild(block);
+    });
+
+    const p = document.createElement('div');
+    p.className = 'payload-block';
+    p.title = msgInput.value || 'Hello, World!';
+    p.textContent = msgInput.value || 'Hello, World!';
+    bar.appendChild(p);
+
+    const byteCount = ld.cumulative_hex.trim()
+      ? ld.cumulative_hex.trim().split(/\s+/).length : 0;
+    bcnt.textContent = `${byteCount} B`;
+
+    if (n === incoming.layer_number) {
+      row.classList.add('glow');
+      row.style.boxShadow = `0 0 0 2px ${incoming.color}`;
+      setTimeout(() => {
+        row.classList.remove('glow');
+        if (!corruptOn || n !== 3) row.style.boxShadow = '';
+      }, 1600);
+    }
+  });
+}
+
+function explainHex(data, byteCount) {
+  const isDecap = data.direction === 'decap';
+  const headerSize = data.header_size;
+  const protocol = data.protocol;
+  const layerName = data.layer_name;
+  const currentBytes = headerSize === 1 ? '1 highlighted byte' : `${headerSize} highlighted bytes`;
+  const totalBytes = byteCount === 1 ? '1 byte' : `${byteCount} bytes`;
+
+  hexGuideTitle.textContent = isDecap
+    ? `Reading ${protocol} Bytes`
+    : `${protocol} Bytes Added`;
+
+  if (!byteCount) {
+    hexGuideText.textContent = 'No packet bytes are visible yet. Start the simulation to see the raw packet form here.';
+    return;
+  }
+
+  const action = isDecap
+    ? `The receiver is reading the ${layerName} layer. The ${currentBytes} show the ${protocol} information being interpreted and removed before the payload moves upward.`
+    : `The ${layerName} layer is adding ${protocol} information. The ${currentBytes} show the new header or data for this layer.`;
+
+  const byteMeaning = `The whole dump currently contains ${totalBytes}. The left column is the byte position, the middle is raw hexadecimal bytes, and the right side tries to show printable text like your message.`;
+  const checksumNote = data.layer_number === 3 && corruptOn
+    ? ' The red bytes are the intentionally corrupted IP checksum.'
+    : '';
+
+  hexGuideText.textContent = `${action} ${byteMeaning}${checksumNote}`;
+}
+
+function renderHex(data) {
+  const bytes = data.cumulative_hex.trim()
+    ? data.cumulative_hex.trim().split(/\s+/).map(h => parseInt(h, 16)) : [];
+
+  // The header bytes for the current layer are at the START of cumulative_hex.
+  // Because each layer's cumulative starts with that layer's header,
+  // bytes [0 .. header_size - 1] belong to the current layer.
+  const hlEnd = data.header_size;
+
+  // For corrupt mode: find IP checksum bytes.
+  // IP header starts at byte 0 of the Network layer's cumulative.
+  // When we are at Data Link (L2), IP starts at offset 14.
+  // When we are at Physical (L1), IP starts at offset 22 (14 + preamble 8).
+  // But in the current layer's cumulative, the header is always at byte 0,
+  // so IP is at offset = len(this_header) relative to cumulative start.
+  // Simpler: we mark bytes 10-11 within the IP sub-section.
+  const corruptSet = new Set();
+  if (corruptOn) {
+    let ipStart = -1;
+    if (data.layer_number === 3) ipStart = 0;
+    else if (data.layer_number === 2) ipStart = 14;
+    else if (data.layer_number === 1) ipStart = 22;
+    if (ipStart >= 0) {
+      corruptSet.add(ipStart + 10);
+      corruptSet.add(ipStart + 11);
+    }
+  }
+
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 16) {
+    const slice = bytes.slice(i, i + 16);
+    const offset = i.toString(16).padStart(4, '0');
+    let hex = '', asc = '';
+    for (let j = 0; j < 16; j++) {
+      if (j < slice.length) {
+        const idx = i + j;
+        const bv  = slice[j];
+        const bh  = bv.toString(16).padStart(2, '0');
+        if (corruptSet.has(idx)) {
+          hex += `<span class="byt bad">${bh}</span>`;
+        } else if (idx < hlEnd) {
+          hex += `<span class="byt hl" style="background:${hexToRgba(data.color,.25)};color:${data.color}">${bh}</span>`;
+        } else {
+          hex += `<span class="byt">${bh}</span>`;
+        }
+        asc += (bv >= 32 && bv <= 126)
+          ? `<span class="asc-p">${bv === 60 ? '&lt;' : bv === 62 ? '&gt;' : String.fromCharCode(bv)}</span>`
+          : `<span class="asc-d">.</span>`;
+      } else {
+        hex += `<span class="byt">  </span>`;
+        asc += `<span class="asc-d"> </span>`;
+      }
+      hex += (j === 7 ? '  ' : ' ');
+    }
+    out += `${offset}  ${hex}  ${asc}\n`;
+  }
+
+  hexPre.innerHTML = out;
+  hexPre.classList.add('show');
+  hexCount.textContent = `${bytes.length} bytes`;
+  explainHex(data, bytes.length);
+}
+
+// ── Reset ─────────────────────────────────────────────────────────────────
+function reset() {
+  const cancelledBuildId = activeBuildId;
+  if ((isBuilding || isPaused) && cancelledBuildId) {
+    fetch('/api/control', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({action: 'cancel', build_id: cancelledBuildId}),
+    }).catch(() => {});
+  }
+  isBuilding = false;
+  isPaused   = false;
+  buildDone  = false;
+  canDecapsulate = false;
+  layerCount = 0;
+  corruptOn  = false;
+  activeBuildId = null;
+  activeMode = 'encap';
+  activeDecapLayer = null;
+  strippedLayers.clear();
+  Object.keys(layerMap).forEach(k => delete layerMap[k]);
+  setLayerOrder();
+
+  allRows.forEach(row => {
+    row.classList.remove('active','glow','is-corrupt','decapped');
+    row.style.boxShadow = '';
+    row.querySelector('.ebar').innerHTML = '';
+    row.querySelector('.bcnt').textContent = '-- B';
+  });
+
+  infoName.textContent = 'Click Encapsulate to begin';
+  infoName.style.color = '';
+  infoBadge.style.display = 'none';
+  infoDesc.textContent = 'Packet details and header fields will appear here as each layer is built.';
+  fieldsTbl.innerHTML = '';
+  progText.textContent = `Layer 0 of ${layerOrder.length}`;
+  progDots.innerHTML = '';
+
+  hexPre.classList.remove('show');
+  hexPre.innerHTML = '';
+  hexCount.textContent = '0 bytes';
+  hexGuideTitle.textContent = 'Real Packet Bytes';
+  hexGuideText.textContent = 'This area shows the packet in raw computer form. Each pair like 48 or ff is one byte.';
+  corruptBnr.classList.remove('show');
+  resetStory();
+  syncButtons();
+}
+
+// ── Encapsulate ───────────────────────────────────────────────────────────
+async function encapsulate() {
+  if (isBuilding) return;
+  reset();
+  activeBuildId = makeBuildId();
+  activeMode = 'encap';
+  isBuilding = true;
+  isPaused = false;
+  syncButtons();
+  setLayerOrder();
+  startStory('encap');
+
+  try {
+    const res = await fetch('/api/build', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        message:  msgInput.value  || 'Hello, World!',
+        protocol: protoSel.value,
+        src_ip:   srcInput.value  || '192.168.0.1',
+        dst_ip:   dstInput.value  || '192.168.0.2',
+        corrupt:  corruptChk.checked,
+        speed:    parseFloat(speedIn.value),
+        build_id: activeBuildId,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } catch(e) {
+    isBuilding = false;
+    isPaused = false;
+    activeBuildId = null;
+    syncButtons();
+    toast('Connection error — is the server running on port 5000?', 'error');
+  }
+}
+
+async function decapsulate() {
+  if (isBuilding || !canDecapsulate) return;
+  activeBuildId = makeBuildId();
+  activeMode = 'decap';
+  activeDecapLayer = null;
+  strippedLayers.clear();
+  layerCount = 0;
+  isBuilding = true;
+  isPaused = false;
+  syncButtons();
+  startStory('decap');
+
+  infoName.textContent = 'Decapsulation starting';
+  infoName.style.color = '';
+  infoBadge.style.display = 'none';
+  infoDesc.textContent = 'The receiver will strip headers from L1 upward until the application payload is exposed.';
+  fieldsTbl.innerHTML = '';
+  progText.textContent = `Decapsulation 0 of ${layerOrder.length}`;
+  progDots.innerHTML = '';
+
+  try {
+    const res = await fetch('/api/decapsulate', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        speed: parseFloat(speedIn.value),
+        build_id: activeBuildId,
+      }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+  } catch(e) {
+    isBuilding = false;
+    isPaused = false;
+    activeMode = 'encap';
+    syncButtons();
+    toast('Decapsulation error: ' + e.message, 'error');
+  }
+}
+
+async function togglePause() {
+  if (!isBuilding || !activeBuildId) return;
+  const nextAction = isPaused ? 'resume' : 'pause';
+  btnPause.disabled = true;
+  try {
+    const result = await controlBuild(nextAction);
+    if (!isBuilding) return;
+    if (result.status === 'ignored') return;
+    isPaused = nextAction === 'pause';
+    toast(isPaused ? 'Simulation paused' : 'Simulation resumed', isPaused ? 'warning' : 'success');
+  } catch(e) {
+    toast('Could not update simulation controls', 'error');
+  } finally {
+    syncButtons();
+  }
+}
+
+// ── Socket.IO ─────────────────────────────────────────────────────────────
+const socket = io({
+  transports: ['websocket','polling'],
+  reconnection: true,
+  reconnectionAttempts: 5,
+  reconnectionDelay: 1000,
+});
+
+socket.on('connect',    () => updateConn(true));
+socket.on('disconnect', () => updateConn(false));
+
+socket.on('layer_event', data => {
+  if (!isActiveEvent(data)) return;
+  layerCount++;
+  layerMap[data.layer_number] = data;
+  if (data.corrupt) { corruptOn = true; corruptBnr.classList.add('show'); }
+  renderStack(data);
+  renderInfo(data);
+  renderHex(data);
+  updateStory(data);
+});
+
+socket.on('build_complete', data => {
+  if (!isActiveEvent(data)) return;
+  isBuilding = false;
+  isPaused = false;
+  buildDone  = true;
+  canDecapsulate = true;
+  addStoryItem('The packet is fully wrapped now. It is ready to travel across the network or be decapsulated by the receiver.', 'encap-complete');
+  syncButtons();
+  toast(`Packet complete — ${data.total_bytes} bytes across ${data.layers} layers`, 'success');
+});
+
+socket.on('build_error', data => {
+  if (!isActiveEvent(data)) return;
+  isBuilding = false;
+  isPaused = false;
+  activeMode = 'encap';
+  syncButtons();
+  toast('Error: ' + data.message, 'error');
+});
+
+socket.on('decap_layer_event', data => {
+  if (!isActiveEvent(data)) return;
+  if (activeDecapLayer !== null && activeDecapLayer !== data.layer_number) {
+    strippedLayers.add(activeDecapLayer);
+  }
+  activeDecapLayer = data.layer_number;
+  layerCount++;
+  if (data.corrupt) { corruptOn = true; corruptBnr.classList.add('show'); }
+  renderDecapStack(data);
+  renderInfo(data);
+  renderHex(data);
+  updateStory(data);
+});
+
+socket.on('decap_complete', data => {
+  if (!isActiveEvent(data)) return;
+  isBuilding = false;
+  isPaused = false;
+  activeMode = 'encap';
+  activeDecapLayer = null;
+  canDecapsulate = true;
+  addStoryItem('All headers have been removed. The receiver is back to the original application data.', 'decap-complete');
+  syncButtons();
+  toast(`Decapsulation complete — ${data.layers} layers processed`, 'success');
+});
+
+// ── UI events ─────────────────────────────────────────────────────────────
+speedIn.addEventListener('input', () => {
+  speedVal.textContent = parseFloat(speedIn.value).toFixed(1) + ' s';
+});
+
+protoSel.addEventListener('change', () => {
+  if (!isBuilding) reset();
+});
+
+btnEnc.addEventListener('click',   encapsulate);
+btnPause.addEventListener('click', togglePause);
+btnDec.addEventListener('click',   decapsulate);
+btnReset.addEventListener('click', reset);
+btnPcap.addEventListener('click',  () => { if (buildDone) window.location.href = '/api/export-pcap'; });
+
+// ── Init ─────────────────────────────────────────────────────────────────
+reset();
+</script>
+</body>
+</html>
